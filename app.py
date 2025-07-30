@@ -1,8 +1,7 @@
 import os
 from flask import Flask, request, jsonify, render_template_string, redirect, url_for, session, flash
 from flask_cors import CORS
-from pymongo import MongoClient
-from bson.objectid import ObjectId
+from supabase import create_client, Client
 from werkzeug.security import check_password_hash, generate_password_hash
 from dotenv import load_dotenv
 
@@ -11,74 +10,24 @@ load_dotenv()
 
 # --- App Initialization ---
 app = Flask(__name__)
-# Enable CORS for all routes, allowing your frontend to make API calls
 CORS(app) 
-# A secret key is required for Flask sessions (which we use for login)
 app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', 'a-very-secret-key-for-development')
 
-# --- Database Connection ---
+# --- Supabase Connection ---
 # Make sure to set these variables in your .env file
-MONGO_URI = os.getenv('MONGO_URI')
-
-if not MONGO_URI:
-    raise ValueError("MONGO_URI must be set in the .env file")
-
+SUPABASE_URL = os.getenv('SUPABASE_URL')
+SUPABASE_KEY = os.getenv('SUPABASE_KEY') # This should be your 'service_role' key
 HASHED_CMS_PASSWORD = os.getenv('HASHED_CMS_PASSWORD')
-if not HASHED_CMS_PASSWORD:
-    raise ValueError("HASHED_CMS_PASSWORD must be set in the .env file")
 
+if not SUPABASE_URL or not SUPABASE_KEY or not HASHED_CMS_PASSWORD:
+    raise ValueError("SUPABASE_URL, SUPABASE_KEY, and HASHED_CMS_PASSWORD must be set in the .env file")
 
-client = MongoClient(MONGO_URI)
-db = client.PortoCMS # Use the database name from your screenshot
-projects_collection = db.project_data # Use the collection name
-
-# --- Helper Function ---
-def bson_to_json(data):
-    """Converts BSON data (like MongoDB's _id) to JSON-serializable format."""
-    if isinstance(data, list):
-        return [bson_to_json(item) for item in data]
-    if isinstance(data, dict):
-        for key, value in data.items():
-            if isinstance(value, ObjectId):
-                data[key] = str(value)
-    return data
-
-# ==============================================================================
-# API ROUTES (Publicly accessible by your frontend)
-# ==============================================================================
-
-@app.route('/api/projects/all', methods=['GET'])
-def get_all_projects():
-    """API endpoint to get all projects."""
-    try:
-        projects = list(projects_collection.find({}).sort("display_order", 1))
-        return jsonify(bson_to_json(projects)), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/projects/showcased', methods=['GET'])
-def get_showcased_projects():
-    """API endpoint to get the top 3 showcased projects."""
-    try:
-        projects = list(projects_collection.find({"is_showcased": True}).sort("display_order", 1).limit(3))
-        return jsonify(bson_to_json(projects)), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/projects/<project_id>', methods=['GET'])
-def get_project_by_id(project_id):
-    """API endpoint to get a single project by its ID."""
-    try:
-        project = projects_collection.find_one({"_id": ObjectId(project_id)})
-        if project:
-            return jsonify(bson_to_json(project)), 200
-        else:
-            return jsonify({"error": "Project not found"}), 404
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+# Initialize the Supabase client
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ==============================================================================
 # CMS ROUTES (For managing projects, requires login)
+# NOTE: All /api/* routes have been removed as they are now handled by Cloudflare
 # ==============================================================================
 
 # --- Login Page ---
@@ -172,8 +121,8 @@ DASHBOARD_TEMPLATE = """
                         <td class="px-5 py-5 border-b border-gray-200 bg-white text-sm"><span class="relative inline-block px-3 py-1 font-semibold leading-tight {{ 'text-green-900' if project.is_showcased else 'text-gray-700' }}"><span aria-hidden class="absolute inset-0 {{ 'bg-green-200' if project.is_showcased else 'bg-gray-200' }} opacity-50 rounded-full"></span><span class="relative">{{ 'Yes' if project.is_showcased else 'No' }}</span></span></td>
                         <td class="px-5 py-5 border-b border-gray-200 bg-white text-sm"><p class="text-gray-900 whitespace-no-wrap">{{ project.display_order }}</p></td>
                         <td class="px-5 py-5 border-b border-gray-200 bg-white text-sm">
-                            <a href="{{ url_for('edit_project', project_id=project._id) }}" class="text-indigo-600 hover:text-indigo-900">Edit</a>
-                            <form action="{{ url_for('delete_project', project_id=project._id) }}" method="post" class="inline-block ml-4" onsubmit="return confirm('Are you sure you want to delete this project?');">
+                            <a href="{{ url_for('edit_project', project_id=project.id) }}" class="text-indigo-600 hover:text-indigo-900">Edit</a>
+                            <form action="{{ url_for('delete_project', project_id=project.id) }}" method="post" class="inline-block ml-4" onsubmit="return confirm('Are you sure you want to delete this project?');">
                                 <button type="submit" class="text-red-600 hover:text-red-900">Delete</button>
                             </form>
                         </td>
@@ -192,8 +141,8 @@ def cms_dashboard():
     if not session.get('logged_in'):
         return redirect(url_for('login'))
     
-    all_projects = list(projects_collection.find({}).sort("display_order", 1))
-    return render_template_string(DASHBOARD_TEMPLATE, projects=bson_to_json(all_projects))
+    response = supabase.table('projects').select('*').order('display_order').execute()
+    return render_template_string(DASHBOARD_TEMPLATE, projects=response.data)
 
 # --- Add/Edit Project Page ---
 PROJECT_FORM_TEMPLATE = """
@@ -207,7 +156,7 @@ PROJECT_FORM_TEMPLATE = """
 <body class="bg-gray-100 p-8">
     <div class="container mx-auto max-w-2xl">
         <h1 class="text-3xl font-bold mb-6">{{ 'Edit' if project else 'Add' }} Project</h1>
-        <form action="{{ url_for('edit_project', project_id=project._id) if project else url_for('add_project') }}" method="post" class="bg-white shadow-md rounded px-8 pt-6 pb-8 mb-4">
+        <form action="{{ url_for('edit_project', project_id=project.id) if project else url_for('add_project') }}" method="post" class="bg-white shadow-md rounded px-8 pt-6 pb-8 mb-4">
             <div class="mb-4">
                 <label class="block text-gray-700 text-sm font-bold mb-2">Title</label>
                 <input type="text" name="title" value="{{ project.title or '' }}" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700" required>
@@ -262,60 +211,57 @@ def add_project():
         return redirect(url_for('login'))
     
     if request.method == 'POST':
+        # Convert comma-separated string to a list for Supabase array type
+        techs = [tech.strip() for tech in request.form.get('technologies', '').split(',') if tech.strip()]
         new_project = {
             "title": request.form.get('title'),
             "short_description": request.form.get('short_description'),
             "long_description": request.form.get('long_description'),
             "image_url": request.form.get('image_url'),
-            "technologies": [tech.strip() for tech in request.form.get('technologies', '').split(',')],
+            "technologies": techs,
             "github_link": request.form.get('github_link'),
             "live_demo_link": request.form.get('live_demo_link'),
             "is_showcased": 'is_showcased' in request.form,
             "display_order": int(request.form.get('display_order', 99))
         }
-        projects_collection.insert_one(new_project)
+        supabase.table('projects').insert(new_project).execute()
         return redirect(url_for('cms_dashboard'))
 
     return render_template_string(PROJECT_FORM_TEMPLATE, project=None)
 
-@app.route('/cms/edit/<project_id>', methods=['GET', 'POST'])
+@app.route('/cms/edit/<int:project_id>', methods=['GET', 'POST'])
 def edit_project(project_id):
     if not session.get('logged_in'):
         return redirect(url_for('login'))
 
-    project = projects_collection.find_one({"_id": ObjectId(project_id)})
-    if not project:
-        return "Project not found", 404
-
     if request.method == 'POST':
+        techs = [tech.strip() for tech in request.form.get('technologies', '').split(',') if tech.strip()]
         updated_data = {
             "title": request.form.get('title'),
             "short_description": request.form.get('short_description'),
             "long_description": request.form.get('long_description'),
             "image_url": request.form.get('image_url'),
-            "technologies": [tech.strip() for tech in request.form.get('technologies', '').split(',')],
+            "technologies": techs,
             "github_link": request.form.get('github_link'),
             "live_demo_link": request.form.get('live_demo_link'),
             "is_showcased": 'is_showcased' in request.form,
             "display_order": int(request.form.get('display_order', 99))
         }
-        projects_collection.update_one({"_id": ObjectId(project_id)}, {"$set": updated_data})
+        supabase.table('projects').update(updated_data).eq('id', project_id).execute()
         return redirect(url_for('cms_dashboard'))
 
-    return render_template_string(PROJECT_FORM_TEMPLATE, project=bson_to_json(project))
+    response = supabase.table('projects').select('*').eq('id', project_id).single().execute()
+    return render_template_string(PROJECT_FORM_TEMPLATE, project=response.data)
 
-@app.route('/cms/delete/<project_id>', methods=['POST'])
+@app.route('/cms/delete/<int:project_id>', methods=['POST'])
 def delete_project(project_id):
     if not session.get('logged_in'):
         return redirect(url_for('login'))
     
-    projects_collection.delete_one({"_id": ObjectId(project_id)})
+    supabase.table('projects').delete().eq('id', project_id).execute()
     return redirect(url_for('cms_dashboard'))
 
 
 # --- Main Entry Point ---
 if __name__ == '__main__':
-    # Use 0.0.0.0 to make it accessible on your local network
-    # The default port is 5000
     app.run(host='0.0.0.0', port=5000, debug=True)
-

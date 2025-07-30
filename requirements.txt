@@ -1,6 +1,6 @@
 Flask
 Flask-Cors
-pymongo[srv]
+supabase
 python-dotenv
 werkzeug
 gunicorn

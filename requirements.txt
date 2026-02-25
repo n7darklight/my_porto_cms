@@ -1,6 +1,6 @@
 Flask
 Flask-Cors
-supabase
+psycopg2
 python-dotenv
 werkzeug
 gunicorn

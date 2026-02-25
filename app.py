@@ -141,7 +141,7 @@ def cms_dashboard():
     if not session.get('logged_in'):
         return redirect(url_for('login'))
     
-    response = supabase.table('project_data').select('*').order('display_order').execute()
+    response = supabase.table('porto_project_data').select('*').order('display_order').execute()
     return render_template_string(DASHBOARD_TEMPLATE, projects=response.data)
 
 # --- Add/Edit Project Page ---
@@ -224,7 +224,7 @@ def add_project():
             "is_showcased": 'is_showcased' in request.form,
             "display_order": int(request.form.get('display_order', 99))
         }
-        supabase.table('project_data').insert(new_project).execute()
+        supabase.table('porto_project_data').insert(new_project).execute()
         return redirect(url_for('cms_dashboard'))
 
     return render_template_string(PROJECT_FORM_TEMPLATE, project=None)
@@ -247,10 +247,10 @@ def edit_project(project_id):
             "is_showcased": 'is_showcased' in request.form,
             "display_order": int(request.form.get('display_order', 99))
         }
-        supabase.table('project_data').update(updated_data).eq('id', project_id).execute()
+        supabase.table('porto_project_data').update(updated_data).eq('id', project_id).execute()
         return redirect(url_for('cms_dashboard'))
 
-    response = supabase.table('project_data').select('*').eq('id', project_id).single().execute()
+    response = supabase.table('porto_project_data').select('*').eq('id', project_id).single().execute()
     return render_template_string(PROJECT_FORM_TEMPLATE, project=response.data)
 
 @app.route('/cms/delete/<int:project_id>', methods=['POST'])
@@ -258,7 +258,7 @@ def delete_project(project_id):
     if not session.get('logged_in'):
         return redirect(url_for('login'))
     
-    supabase.table('project_data').delete().eq('id', project_id).execute()
+    supabase.table('porto_project_data').delete().eq('id', project_id).execute()
     return redirect(url_for('cms_dashboard'))
 
 

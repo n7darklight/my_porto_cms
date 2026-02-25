@@ -1,7 +1,7 @@
 import os
+import psycopg2
+import psycopg2.extras
 from flask import Flask, request, jsonify, render_template_string, redirect, url_for, session, flash
-from flask_cors import CORS
-from supabase import create_client, Client
 from werkzeug.security import check_password_hash, generate_password_hash
 from dotenv import load_dotenv
 
@@ -10,20 +10,35 @@ load_dotenv()
 
 # --- App Initialization ---
 app = Flask(__name__)
-CORS(app) 
 app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', 'a-very-secret-key-for-development')
 
-# --- Supabase Connection ---
+# --- PostgreSQL Connection ---
 # Make sure to set these variables in your .env file
-SUPABASE_URL = os.getenv('SUPABASE_URL')
-SUPABASE_KEY = os.getenv('SUPABASE_KEY') # This should be your 'service_role' key
+DB_USER = os.getenv('user')
+DB_PASSWORD = os.getenv('password')
+DB_HOST = os.getenv('host')
+DB_PORT = os.getenv('port')
+DB_NAME = os.getenv('dbname')
 HASHED_CMS_PASSWORD = os.getenv('HASHED_CMS_PASSWORD')
 
-if not SUPABASE_URL or not SUPABASE_KEY or not HASHED_CMS_PASSWORD:
-    raise ValueError("SUPABASE_URL, SUPABASE_KEY, and HASHED_CMS_PASSWORD must be set in the .env file")
+if not all([DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME, HASHED_CMS_PASSWORD]):
+    raise ValueError("Database credentials (user, password, host, port, dbname) and HASHED_CMS_PASSWORD must be set in the .env file")
 
-# Initialize the Supabase client
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# Database connection helper function
+def get_db_connection():
+    """Create and return a PostgreSQL database connection"""
+    try:
+        connection = psycopg2.connect(
+            user=DB_USER,
+            password=DB_PASSWORD,
+            host=DB_HOST,
+            port=DB_PORT,
+            dbname=DB_NAME
+        )
+        return connection
+    except Exception as e:
+        print(f"Failed to connect to database: {e}")
+        raise
 
 # ==============================================================================
 # CMS ROUTES (For managing projects, requires login)
@@ -141,8 +156,23 @@ def cms_dashboard():
     if not session.get('logged_in'):
         return redirect(url_for('login'))
     
-    response = supabase.table('porto_project_data').select('*').order('display_order').execute()
-    return render_template_string(DASHBOARD_TEMPLATE, projects=response.data)
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        
+        cursor.execute("SELECT * FROM porto_project_data ORDER BY display_order ASC")
+        projects = cursor.fetchall()
+        
+        cursor.close()
+        connection.close()
+        
+        # Convert RealDictRow to regular dict for template compatibility
+        projects = [dict(project) for project in projects]
+        return render_template_string(DASHBOARD_TEMPLATE, projects=projects)
+    except Exception as e:
+        print(f"Error fetching projects: {e}")
+        flash('Error loading projects.', 'error')
+        return redirect(url_for('login'))
 
 # --- Add/Edit Project Page ---
 PROJECT_FORM_TEMPLATE = """
@@ -211,21 +241,38 @@ def add_project():
         return redirect(url_for('login'))
     
     if request.method == 'POST':
-        # Convert comma-separated string to a list for Supabase array type
-        techs = [tech.strip() for tech in request.form.get('technologies', '').split(',') if tech.strip()]
-        new_project = {
-            "title": request.form.get('title'),
-            "short_description": request.form.get('short_description'),
-            "long_description": request.form.get('long_description'),
-            "image_url": request.form.get('image_url'),
-            "technologies": techs,
-            "github_link": request.form.get('github_link'),
-            "live_demo_link": request.form.get('live_demo_link'),
-            "is_showcased": 'is_showcased' in request.form,
-            "display_order": int(request.form.get('display_order', 99))
-        }
-        supabase.table('porto_project_data').insert(new_project).execute()
-        return redirect(url_for('cms_dashboard'))
+        try:
+            techs = [tech.strip() for tech in request.form.get('technologies', '').split(',') if tech.strip()]
+            
+            connection = get_db_connection()
+            cursor = connection.cursor()
+            
+            cursor.execute("""
+                INSERT INTO porto_project_data 
+                (title, short_description, long_description, image_url, technologies, github_link, live_demo_link, is_showcased, display_order)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                request.form.get('title'),
+                request.form.get('short_description'),
+                request.form.get('long_description'),
+                request.form.get('image_url'),
+                techs,
+                request.form.get('github_link'),
+                request.form.get('live_demo_link'),
+                'is_showcased' in request.form,
+                int(request.form.get('display_order', 99))
+            ))
+            
+            connection.commit()
+            cursor.close()
+            connection.close()
+            
+            flash('Project added successfully!', 'success')
+            return redirect(url_for('cms_dashboard'))
+        except Exception as e:
+            print(f"Error adding project: {e}")
+            flash('Error adding project.', 'error')
+            return redirect(url_for('add_project'))
 
     return render_template_string(PROJECT_FORM_TEMPLATE, project=None)
 
@@ -234,32 +281,81 @@ def edit_project(project_id):
     if not session.get('logged_in'):
         return redirect(url_for('login'))
 
-    if request.method == 'POST':
-        techs = [tech.strip() for tech in request.form.get('technologies', '').split(',') if tech.strip()]
-        updated_data = {
-            "title": request.form.get('title'),
-            "short_description": request.form.get('short_description'),
-            "long_description": request.form.get('long_description'),
-            "image_url": request.form.get('image_url'),
-            "technologies": techs,
-            "github_link": request.form.get('github_link'),
-            "live_demo_link": request.form.get('live_demo_link'),
-            "is_showcased": 'is_showcased' in request.form,
-            "display_order": int(request.form.get('display_order', 99))
-        }
-        supabase.table('porto_project_data').update(updated_data).eq('id', project_id).execute()
-        return redirect(url_for('cms_dashboard'))
+    try:
+        if request.method == 'POST':
+            techs = [tech.strip() for tech in request.form.get('technologies', '').split(',') if tech.strip()]
+            
+            connection = get_db_connection()
+            cursor = connection.cursor()
+            
+            cursor.execute("""
+                UPDATE porto_project_data
+                SET title = %s, short_description = %s, long_description = %s, 
+                    image_url = %s, technologies = %s, github_link = %s, 
+                    live_demo_link = %s, is_showcased = %s, display_order = %s
+                WHERE id = %s
+            """, (
+                request.form.get('title'),
+                request.form.get('short_description'),
+                request.form.get('long_description'),
+                request.form.get('image_url'),
+                techs,
+                request.form.get('github_link'),
+                request.form.get('live_demo_link'),
+                'is_showcased' in request.form,
+                int(request.form.get('display_order', 99)),
+                project_id
+            ))
+            
+            connection.commit()
+            cursor.close()
+            connection.close()
+            
+            flash('Project updated successfully!', 'success')
+            return redirect(url_for('cms_dashboard'))
 
-    response = supabase.table('porto_project_data').select('*').eq('id', project_id).single().execute()
-    return render_template_string(PROJECT_FORM_TEMPLATE, project=response.data)
+        # GET request - fetch the project
+        connection = get_db_connection()
+        cursor = connection.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        
+        cursor.execute("SELECT * FROM porto_project_data WHERE id = %s", (project_id,))
+        project = cursor.fetchone()
+        
+        cursor.close()
+        connection.close()
+        
+        if not project:
+            flash('Project not found.', 'error')
+            return redirect(url_for('cms_dashboard'))
+        
+        project = dict(project)
+        return render_template_string(PROJECT_FORM_TEMPLATE, project=project)
+    except Exception as e:
+        print(f"Error: {e}")
+        flash('Error processing request.', 'error')
+        return redirect(url_for('cms_dashboard'))
 
 @app.route('/cms/delete/<int:project_id>', methods=['POST'])
 def delete_project(project_id):
     if not session.get('logged_in'):
         return redirect(url_for('login'))
     
-    supabase.table('porto_project_data').delete().eq('id', project_id).execute()
-    return redirect(url_for('cms_dashboard'))
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor()
+        
+        cursor.execute("DELETE FROM porto_project_data WHERE id = %s", (project_id,))
+        connection.commit()
+        
+        cursor.close()
+        connection.close()
+        
+        flash('Project deleted successfully!', 'success')
+        return redirect(url_for('cms_dashboard'))
+    except Exception as e:
+        print(f"Error deleting project: {e}")
+        flash('Error deleting project.', 'error')
+        return redirect(url_for('cms_dashboard'))
 
 
 # --- Main Entry Point ---

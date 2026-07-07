@@ -5,6 +5,7 @@ from flask import Flask, request, jsonify, render_template_string, redirect, url
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
+import base64
 
 # Load environment variables from a .env file
 load_dotenv()
@@ -20,7 +21,13 @@ app.wsgi_app = ProxyFix(
 
 # --- PostgreSQL Connection ---
 DATABASE_URL = os.getenv('DATABASE_URL')
-HASHED_CMS_PASSWORD = os.getenv('HASHED_CMS_PASSWORD')
+
+ENCODED_PW = os.getenv('ENCODED_CMS_PASSWORD')
+if not ENCODED_PW:
+    raise ValueError("ENCODED_CMS_PASSWORD must be set.")
+
+# Decode from Base64 back to the original hash string
+HASHED_CMS_PASSWORD = base64.b64decode(ENCODED_PW).decode('utf-8')
 
 if not DATABASE_URL or not HASHED_CMS_PASSWORD:
     raise ValueError("DATABASE_URL and HASHED_CMS_PASSWORD must be set in the environment variables.")

@@ -83,6 +83,11 @@ LOGIN_TEMPLATE = """
 </html>
 """
 
+@app.route('/')
+def index():
+    # Returns a 302 redirect, satisfying the Coolify healthcheck
+    return redirect(url_for('cms_dashboard'))
+
 @app.route('/cms/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':

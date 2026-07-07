@@ -3,6 +3,7 @@ import psycopg2
 import psycopg2.extras
 from flask import Flask, request, jsonify, render_template_string, redirect, url_for, session, flash
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
 
 # Load environment variables from a .env file
@@ -12,29 +13,23 @@ load_dotenv()
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', 'a-very-secret-key-for-development')
 
+# Trust headers from Cloudflare Tunnel
+app.wsgi_app = ProxyFix(
+    app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1
+)
+
 # --- PostgreSQL Connection ---
-# Make sure to set these variables in your .env file
-DB_USER = os.getenv('user')
-DB_PASSWORD = os.getenv('password')
-DB_HOST = os.getenv('host')
-DB_PORT = os.getenv('port')
-DB_NAME = os.getenv('dbname')
+DATABASE_URL = os.getenv('DATABASE_URL')
 HASHED_CMS_PASSWORD = os.getenv('HASHED_CMS_PASSWORD')
 
-if not all([DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME, HASHED_CMS_PASSWORD]):
-    raise ValueError("Database credentials (user, password, host, port, dbname) and HASHED_CMS_PASSWORD must be set in the .env file")
+if not DATABASE_URL or not HASHED_CMS_PASSWORD:
+    raise ValueError("DATABASE_URL and HASHED_CMS_PASSWORD must be set in the environment variables.")
 
 # Database connection helper function
 def get_db_connection():
     """Create and return a PostgreSQL database connection"""
     try:
-        connection = psycopg2.connect(
-            user=DB_USER,
-            password=DB_PASSWORD,
-            host=DB_HOST,
-            port=DB_PORT,
-            dbname=DB_NAME
-        )
+        connection = psycopg2.connect(DATABASE_URL)
         return connection
     except Exception as e:
         print(f"Failed to connect to database: {e}")
@@ -42,7 +37,6 @@ def get_db_connection():
 
 # ==============================================================================
 # CMS ROUTES (For managing projects, requires login)
-# NOTE: All /api/* routes have been removed as they are now handled by Cloudflare
 # ==============================================================================
 
 # --- Login Page ---
@@ -160,7 +154,8 @@ def cms_dashboard():
         connection = get_db_connection()
         cursor = connection.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         
-        cursor.execute("SELECT * FROM porto_project_data ORDER BY display_order ASC")
+        # Updated to explicitly use the porto_cms schema
+        cursor.execute("SELECT * FROM porto_cms.porto_project_data ORDER BY display_order ASC")
         projects = cursor.fetchall()
         
         cursor.close()
@@ -247,8 +242,9 @@ def add_project():
             connection = get_db_connection()
             cursor = connection.cursor()
             
+            # Updated to explicitly use the porto_cms schema
             cursor.execute("""
-                INSERT INTO porto_project_data 
+                INSERT INTO porto_cms.porto_project_data 
                 (title, short_description, long_description, image_url, technologies, github_link, live_demo_link, is_showcased, display_order)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
@@ -288,8 +284,9 @@ def edit_project(project_id):
             connection = get_db_connection()
             cursor = connection.cursor()
             
+            # Updated to explicitly use the porto_cms schema
             cursor.execute("""
-                UPDATE porto_project_data
+                UPDATE porto_cms.porto_project_data
                 SET title = %s, short_description = %s, long_description = %s, 
                     image_url = %s, technologies = %s, github_link = %s, 
                     live_demo_link = %s, is_showcased = %s, display_order = %s
@@ -318,7 +315,8 @@ def edit_project(project_id):
         connection = get_db_connection()
         cursor = connection.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         
-        cursor.execute("SELECT * FROM porto_project_data WHERE id = %s", (project_id,))
+        # Updated to explicitly use the porto_cms schema
+        cursor.execute("SELECT * FROM porto_cms.porto_project_data WHERE id = %s", (project_id,))
         project = cursor.fetchone()
         
         cursor.close()
@@ -344,7 +342,8 @@ def delete_project(project_id):
         connection = get_db_connection()
         cursor = connection.cursor()
         
-        cursor.execute("DELETE FROM porto_project_data WHERE id = %s", (project_id,))
+        # Updated to explicitly use the porto_cms schema
+        cursor.execute("DELETE FROM porto_cms.porto_project_data WHERE id = %s", (project_id,))
         connection.commit()
         
         cursor.close()
@@ -360,4 +359,6 @@ def delete_project(project_id):
 
 # --- Main Entry Point ---
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # Listen on Nixpacks PORT or default to 5000. Debug disabled for prod.
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)

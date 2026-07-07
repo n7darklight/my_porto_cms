@@ -179,6 +179,10 @@ def cms_dashboard():
     except Exception as e:
         print(f"Error fetching projects: {e}")
         flash('Error loading projects.', 'error')
+        import traceback
+        full_error = traceback.format_exc()
+        print(f"DEBUGGING ERROR: {full_error}") 
+        flash(f'Error: {str(e)}', 'error')
         return redirect(url_for('login'))
 
 # --- Add/Edit Project Page ---
@@ -372,5 +376,5 @@ def delete_project(project_id):
 # --- Main Entry Point ---
 if __name__ == '__main__':
     # Listen on Nixpacks PORT or default to 5000. Debug disabled for prod.
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 9703))
     app.run(host='0.0.0.0', port=port, debug=False)

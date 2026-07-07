@@ -372,6 +372,43 @@ def delete_project(project_id):
         flash('Error deleting project.', 'error')
         return redirect(url_for('cms_dashboard'))
 
+@app.route("/api/projects")
+def api_projects():
+    connection = get_db_connection()
+    cursor = connection.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    project_id = request.args.get("id")
+    showcased = request.args.get("showcased")
+
+    if project_id:
+        cursor.execute(
+            "SELECT * FROM porto_cms.porto_project_data WHERE id=%s",
+            (project_id,)
+        )
+        result = cursor.fetchone()
+        return jsonify(result)
+
+    elif showcased == "true":
+        cursor.execute("""
+            SELECT *
+            FROM porto_cms.porto_project_data
+            WHERE is_showcased = TRUE
+            ORDER BY display_order
+            LIMIT 3
+        """)
+    else:
+        cursor.execute("""
+            SELECT *
+            FROM porto_cms.porto_project_data
+            ORDER BY display_order
+        """)
+
+    rows = cursor.fetchall()
+
+    cursor.close()
+    connection.close()
+
+    return jsonify(rows)
 
 # --- Main Entry Point ---
 if __name__ == '__main__':

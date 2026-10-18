@@ -1,6 +1,8 @@
+python-dotenv
 flask
 flask-Cors
-psycopg2
-python-dotenv
+# psycopg2
+# python-dotenv
 werkzeug
 gunicorn
+clickhouse_connect
